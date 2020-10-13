@@ -1,3 +1,5 @@
+const RANGE_TO_DOM = Symbol('range to dom')
+
 export function createElement(type, props, ...children) {
   let el
   if (typeof type === 'string') {
@@ -16,6 +18,10 @@ export function createElement(type, props, ...children) {
         child = new TextWrapper(child)
       }
 
+      if (child === null) {
+        continue
+      }
+
       if (typeof child === 'object' && child instanceof Array) {
         insertChildren(child)
       } else {
@@ -28,8 +34,12 @@ export function createElement(type, props, ...children) {
   return el
 }
 
-export function render(element, pageDom) {
-  pageDom.appendChild(element.root)
+export function render(element, parentDom) {
+  let range = document.createRange()
+  range.setStart(parentDom, 0)
+  range.setEnd(parentDom, parentDom.childNodes.length)
+  range.deleteContents()
+  element[RANGE_TO_DOM](range)
 }
 
 class ElementWrapper {
@@ -38,17 +48,36 @@ class ElementWrapper {
   }
 
   setProps(name, value) {
-    this.root.setAttribute(name, value)
+    if (name.match(/^on([\s\S]+)$/)) {
+      this.root.addEventListener(RegExp.$1.replace(/^[\s\S]/, s => s.toLowerCase()), value)
+    } else if (name === 'className') {
+      this.root.setAttribute('class', value)
+    } else {
+      this.root.setAttribute(name, value)
+    }
   }
 
   appendChild(component) {
-    this.root.appendChild(component.root)
+    let range = document.createRange()
+    range.setStart(this.root, this.root.childNodes.length)
+    range.setEnd(this.root, this.root.childNodes.length)
+    component[RANGE_TO_DOM](range)
+  }
+
+  [RANGE_TO_DOM](range) {
+    range.deleteContents()
+    range.insertNode(this.root)
   }
 }
 
 class TextWrapper {
   constructor(content) {
     this.root = document.createTextNode(content)
+  }
+
+  [RANGE_TO_DOM](range) {
+    range.deleteContents()
+    range.insertNode(this.root)
   }
 }
 
@@ -57,6 +86,7 @@ export class Component {
     this.props = Object.create(null)
     this.children = []
     this._root = null
+    this._range = null
   }
 
   setProps(name, value) {
@@ -67,11 +97,42 @@ export class Component {
     this.children.push(component)
   }
 
-  get root() {
-    if (!this._root) {
-      this._root = this.render().root
+  [RANGE_TO_DOM](range) {
+    this._range = range
+    this.render()[RANGE_TO_DOM](range)
+  }
+
+  rerender() {
+    let oldRange = this._range
+    let range = document.createRange()
+    range.setStart(oldRange.startContainer, oldRange.startOffset)
+    range.setEnd(oldRange.startContainer, oldRange.startOffset)
+
+    this[RANGE_TO_DOM](range)
+
+    oldRange.setStart(range.endContainer, range.endOffset)
+    oldRange.deleteContents()
+  }
+
+  setState(newState) {
+    if (this.state === null || typeof this.state !== 'object') {
+      this.state = newState
+      this.rerender()
+      return
     }
-    return this._root
+
+    function merge(oldState, newState) {
+      for (let key in newState) {
+        if (oldState[key] === null || typeof oldState[key] !== 'object') {
+          oldState[key] = newState[key]
+        } else {
+          merge(oldState[key], newState[key])
+        }
+      }
+    }
+
+    merge(this.state, newState)
+    this.rerender()
   }
 }
 
